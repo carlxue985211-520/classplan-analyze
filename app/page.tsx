@@ -67,7 +67,7 @@ export default function Home() {
         );
       }
 
-      setStatus("Kimi 正在分析中…");
+      setStatus("DeepSeek 正在分析中…");
       const resp = await fetch("/api/analyze", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -112,7 +112,7 @@ export default function Home() {
     <div className="container">
       <div className="header">
         <h1>📘 小学数学教学设计评价助手</h1>
-        <p>上传教学设计（PDF / Word），由 Kimi 按"教—学—评一致性"模型诊断</p>
+        <p>上传教学设计（PDF / Word），由 DeepSeek 按"教—学—评一致性"模型诊断</p>
       </div>
 
       <div className="card">
@@ -169,7 +169,7 @@ export default function Home() {
         </div>
       )}
 
-      <div className="footer">小学数学教学设计评价助手 · Powered by Kimi (Moonshot AI)</div>
+      <div className="footer">小学数学教学设计评价助手 · Powered by DeepSeek</div>
     </div>
   );
 }
