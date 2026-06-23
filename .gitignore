@@ -30,3 +30,6 @@ next-env.d.ts
 
 # vercel
 .vercel
+
+# 设计预览（本地用，不部署）
+design-previews/

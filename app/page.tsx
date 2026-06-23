@@ -130,7 +130,7 @@ export default function Home() {
   return (
     <div className="container">
       <div className="header">
-        <h1>📘 小学数学教学设计评价助手</h1>
+        <h1>小学数学教学设计评价助手</h1>
         <p>上传教学设计（PDF / Word），由 DeepSeek 按"教—学—评一致性"模型诊断</p>
       </div>
 
