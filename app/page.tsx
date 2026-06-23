@@ -1,6 +1,7 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
+import { marked } from "marked";
 
 // 在浏览器里把 PDF / Word(.docx) 解析成纯文本
 async function extractText(file: File): Promise<string> {
@@ -37,7 +38,14 @@ export default function Home() {
   const [status, setStatus] = useState("");
   const [result, setResult] = useState("");
   const [error, setError] = useState("");
+  const [downloading, setDownloading] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  // Markdown → HTML（实时渲染，去掉极少数潜在的 <script>）
+  const resultHtml = useMemo(
+    () => (marked.parse(result) as string).replace(/<script[\s\S]*?<\/script>/gi, ""),
+    [result]
+  );
 
   function pickFile(f: File | null | undefined) {
     if (!f) return;
@@ -98,14 +106,25 @@ export default function Home() {
     navigator.clipboard.writeText(result);
   }
 
-  function downloadResult() {
-    const blob = new Blob([result], { type: "text/plain;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `教案分析-${file?.name || "结果"}.txt`;
-    a.click();
-    URL.revokeObjectURL(url);
+  async function downloadWord() {
+    if (downloading || !result) return;
+    setDownloading(true);
+    try {
+      // 动态加载转换器（含 docx 库），按需加载不拖慢首屏
+      const { markdownToDocxBlob } = await import("@/lib/markdownToDocx");
+      const blob = await markdownToDocxBlob(result, "小学数学教学设计诊断报告");
+      const base = (file?.name || "结果").replace(/\.(pdf|docx?)$/i, "");
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `教学设计诊断报告-${base}.docx`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      setError("生成 Word 失败：" + (e instanceof Error ? e.message : "未知错误"));
+    } finally {
+      setDownloading(false);
+    }
   }
 
   return (
@@ -162,10 +181,15 @@ export default function Home() {
         <div className="result">
           <div className="toolbar">
             <button onClick={copyResult}>复制</button>
-            <button onClick={downloadResult}>下载 .txt</button>
+            <button onClick={downloadWord} disabled={downloading || loading}>
+              {downloading ? "生成中…" : "下载 Word"}
+            </button>
           </div>
           <h2>诊断报告</h2>
-          <div className="result-box">{result}</div>
+          <div
+            className="result-box markdown-body"
+            dangerouslySetInnerHTML={{ __html: resultHtml }}
+          />
         </div>
       )}
 
