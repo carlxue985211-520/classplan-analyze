@@ -5,10 +5,13 @@ import { SYSTEM_PROMPT, USER_INSTRUCTION } from "@/lib/prompt";
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
-const client = new OpenAI({
-  apiKey: process.env.MOONSHOT_API_KEY,
-  baseURL: "https://api.moonshot.cn/v1",
-});
+// 懒加载：只在收到请求时才创建 client，避免构建期因缺少 key 而报错
+function getClient() {
+  return new OpenAI({
+    apiKey: process.env.MOONSHOT_API_KEY,
+    baseURL: "https://api.moonshot.cn/v1",
+  });
+}
 
 const MODEL = process.env.MOONSHOT_MODEL || "moonshot-v1-auto";
 
@@ -21,6 +24,8 @@ export async function POST(req: Request) {
     if (!process.env.MOONSHOT_API_KEY) {
       return jsonError("服务器未配置 MOONSHOT_API_KEY，请在 Vercel 环境变量中设置。", 500);
     }
+
+    const client = getClient();
 
     const form = await req.formData();
     const file = form.get("file");
