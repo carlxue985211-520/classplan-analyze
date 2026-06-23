@@ -4,17 +4,21 @@ import { SYSTEM_PROMPT, USER_INSTRUCTION } from "@/lib/prompt";
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
+// 模型供应商配置（OpenAI 兼容接口）。默认 DeepSeek，可用环境变量切换到 Kimi 等。
+// 兼容旧的 MOONSHOT_API_KEY 命名，避免漏配。
+const API_KEY = process.env.LLM_API_KEY || process.env.MOONSHOT_API_KEY;
+const BASE_URL = process.env.LLM_BASE_URL || "https://api.deepseek.com";
+const MODEL = process.env.LLM_MODEL || "deepseek-chat";
+
 // 懒加载：只在收到请求时才创建 client，避免构建期因缺少 key 而报错
 function getClient() {
   return new OpenAI({
-    apiKey: process.env.MOONSHOT_API_KEY,
-    baseURL: "https://api.moonshot.cn/v1",
+    apiKey: API_KEY,
+    baseURL: BASE_URL,
     maxRetries: 0, // 自己控制重试，避免 SDK 内部重试叠加耗尽 60s 导致 504
     timeout: 45_000, // 留出余量，确保在 Vercel 60s 上限前返回友好错误而非 504
   });
 }
-
-const MODEL = process.env.MOONSHOT_MODEL || "moonshot-v1-auto";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -32,6 +36,7 @@ async function createWithRetry(
         model: MODEL,
         temperature: 0.3,
         stream: true,
+        max_tokens: 8192,
         messages,
       });
     } catch (err) {
@@ -49,8 +54,8 @@ async function createWithRetry(
 
 export async function POST(req: Request) {
   try {
-    if (!process.env.MOONSHOT_API_KEY) {
-      return jsonError("服务器未配置 MOONSHOT_API_KEY，请在 Vercel 环境变量中设置。", 500);
+    if (!API_KEY) {
+      return jsonError("服务器未配置 LLM_API_KEY，请在 Vercel 环境变量中设置。", 500);
     }
 
     // 前端已在浏览器里把 PDF/Word 解析成纯文本，这里只接收文本（payload 很小）
@@ -101,7 +106,7 @@ export async function POST(req: Request) {
     const isTimeout = /timed out|timeout|ETIMEDOUT|ECONNRESET/i.test(message);
     if (status === 429 || (status !== undefined && status >= 500) || isTimeout) {
       return jsonError(
-        "Kimi 引擎当前繁忙/响应过慢，本次未能完成。这是 Kimi 服务器侧的临时过载，和文件无关。请过一两分钟、或避开高峰时段再点一次「开始分析」。",
+        "AI 模型当前繁忙/响应过慢，本次未能完成。这是模型服务器侧的临时问题，和文件无关。请过一两分钟再点一次「开始分析」。",
         503
       );
     }
