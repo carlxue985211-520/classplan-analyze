@@ -9,10 +9,43 @@ function getClient() {
   return new OpenAI({
     apiKey: process.env.MOONSHOT_API_KEY,
     baseURL: "https://api.moonshot.cn/v1",
+    // SDK 自带的自动重试（针对 429/5xx），再叠加下面的手动退避
+    maxRetries: 3,
+    timeout: 50_000,
   });
 }
 
 const MODEL = process.env.MOONSHOT_MODEL || "moonshot-v1-auto";
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+// 针对 Kimi「引擎繁忙(429)」做指数退避重试，最多 4 次
+async function createWithRetry(
+  client: OpenAI,
+  messages: OpenAI.Chat.ChatCompletionMessageParam[]
+) {
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < 4; attempt++) {
+    try {
+      return await client.chat.completions.create({
+        model: MODEL,
+        temperature: 0.3,
+        stream: true,
+        messages,
+      });
+    } catch (err) {
+      lastErr = err;
+      const status = (err as { status?: number })?.status;
+      // 仅对「繁忙/限流(429)」和服务端错误(5xx)重试
+      if (status === 429 || (status && status >= 500)) {
+        await sleep(800 * Math.pow(2, attempt)); // 0.8s, 1.6s, 3.2s, 6.4s
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw lastErr;
+}
 
 export async function POST(req: Request) {
   try {
@@ -32,16 +65,11 @@ export async function POST(req: Request) {
 
     const client = getClient();
 
-    const stream = await client.chat.completions.create({
-      model: MODEL,
-      temperature: 0.3,
-      stream: true,
-      messages: [
-        { role: "system", content: SYSTEM_PROMPT },
-        { role: "system", content: text },
-        { role: "user", content: USER_INSTRUCTION },
-      ],
-    });
+    const stream = await createWithRetry(client, [
+      { role: "system", content: SYSTEM_PROMPT },
+      { role: "system", content: text },
+      { role: "user", content: USER_INSTRUCTION },
+    ]);
 
     const encoder = new TextEncoder();
     const readable = new ReadableStream({
@@ -68,7 +96,14 @@ export async function POST(req: Request) {
       },
     });
   } catch (err) {
+    const status = (err as { status?: number })?.status;
     const message = err instanceof Error ? err.message : "未知错误";
+    if (status === 429) {
+      return jsonError(
+        "Kimi 当前繁忙/达到限流（429），已自动重试多次仍未成功。请过几十秒再点一次「开始分析」。",
+        429
+      );
+    }
     return jsonError("分析失败：" + message, 500);
   }
 }
