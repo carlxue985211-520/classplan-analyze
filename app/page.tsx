@@ -2,21 +2,48 @@
 
 import { useRef, useState } from "react";
 
+// 在浏览器里把 PDF / Word(.docx) 解析成纯文本
+async function extractText(file: File): Promise<string> {
+  const name = file.name.toLowerCase();
+  const buf = await file.arrayBuffer();
+
+  if (name.endsWith(".pdf")) {
+    const pdfjs: any = await import("pdfjs-dist");
+    // 用与库匹配版本的 worker（CDN），避免打包器 worker 配置问题
+    pdfjs.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`;
+    const pdf = await pdfjs.getDocument({ data: buf }).promise;
+    let text = "";
+    for (let i = 1; i <= pdf.numPages; i++) {
+      const page = await pdf.getPage(i);
+      const content = await page.getTextContent();
+      text += content.items.map((it: any) => it.str || "").join(" ") + "\n";
+    }
+    return text;
+  }
+
+  if (name.endsWith(".docx")) {
+    const mammoth: any = await import("mammoth/mammoth.browser");
+    const res = await mammoth.extractRawText({ arrayBuffer: buf });
+    return res.value as string;
+  }
+
+  throw new Error("不支持的格式。请上传 .pdf 或 .docx（旧版 .doc 请先用 Word 另存为 .docx）。");
+}
+
 export default function Home() {
   const [file, setFile] = useState<File | null>(null);
   const [dragging, setDragging] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [status, setStatus] = useState("");
   const [result, setResult] = useState("");
   const [error, setError] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
 
   function pickFile(f: File | null | undefined) {
     if (!f) return;
-    const ok = [".pdf", ".doc", ".docx"].some((ext) =>
-      f.name.toLowerCase().endsWith(ext)
-    );
+    const ok = [".pdf", ".docx"].some((ext) => f.name.toLowerCase().endsWith(ext));
     if (!ok) {
-      setError("只支持 PDF、Word（.doc/.docx）格式的教案文件。");
+      setError("只支持 PDF 和 Word(.docx)。旧版 .doc 请先用 Word 另存为 .docx。");
       return;
     }
     setError("");
@@ -31,10 +58,21 @@ export default function Home() {
     setResult("");
 
     try {
-      const fd = new FormData();
-      fd.append("file", file);
+      setStatus("正在解析文件…");
+      const text = await extractText(file);
 
-      const resp = await fetch("/api/analyze", { method: "POST", body: fd });
+      if (!text || text.trim().length < 20) {
+        throw new Error(
+          "没能从文件里提取到文字，可能是扫描件或纯图片 PDF。请改用带文字层的 Word/PDF。"
+        );
+      }
+
+      setStatus("Kimi 正在分析中…");
+      const resp = await fetch("/api/analyze", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text, filename: file.name }),
+      });
 
       if (!resp.ok || !resp.body) {
         const data = await resp.json().catch(() => ({}));
@@ -52,6 +90,7 @@ export default function Home() {
       setError(err instanceof Error ? err.message : "分析失败，请稍后重试。");
     } finally {
       setLoading(false);
+      setStatus("");
     }
   }
 
@@ -72,8 +111,8 @@ export default function Home() {
   return (
     <div className="container">
       <div className="header">
-        <h1>📘 教案分析助手</h1>
-        <p>上传课堂教案（PDF / Word），由 Kimi 进行智能分析</p>
+        <h1>📘 小学数学教学设计评价助手</h1>
+        <p>上传教学设计（PDF / Word），由 Kimi 按"教—学—评一致性"模型诊断</p>
       </div>
 
       <div className="card">
@@ -92,12 +131,12 @@ export default function Home() {
           }}
         >
           <div className="icon">📄</div>
-          <div>点击选择文件，或把教案拖到这里</div>
-          <div className="hint">支持 .pdf / .doc / .docx，建议小于 10MB</div>
+          <div>点击选择文件，或把教学设计拖到这里</div>
+          <div className="hint">支持 .pdf / .docx（文件大小不再受限，文字会在本地提取）</div>
           <input
             ref={inputRef}
             type="file"
-            accept=".pdf,.doc,.docx"
+            accept=".pdf,.docx"
             style={{ display: "none" }}
             onChange={(e) => pickFile(e.target.files?.[0])}
           />
@@ -109,7 +148,7 @@ export default function Home() {
           {loading ? (
             <>
               <span className="spinner" />
-              Kimi 正在分析中…
+              {status || "处理中…"}
             </>
           ) : (
             "开始分析"
@@ -125,12 +164,12 @@ export default function Home() {
             <button onClick={copyResult}>复制</button>
             <button onClick={downloadResult}>下载 .txt</button>
           </div>
-          <h2>分析结果</h2>
+          <h2>诊断报告</h2>
           <div className="result-box">{result}</div>
         </div>
       )}
 
-      <div className="footer">教案分析助手 · Powered by Kimi (Moonshot AI)</div>
+      <div className="footer">小学数学教学设计评价助手 · Powered by Kimi (Moonshot AI)</div>
     </div>
   );
 }

@@ -1,7 +1,6 @@
-import OpenAI, { toFile } from "openai";
+import OpenAI from "openai";
 import { SYSTEM_PROMPT, USER_INSTRUCTION } from "@/lib/prompt";
 
-// 用 Node.js 运行时（需要文件上传 / Buffer），最长运行 60 秒
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
@@ -15,57 +14,31 @@ function getClient() {
 
 const MODEL = process.env.MOONSHOT_MODEL || "moonshot-v1-auto";
 
-// 允许的文件类型与大小（Vercel 免费版请求体上限约 4.5MB）
-const MAX_SIZE = 20 * 1024 * 1024; // 20MB（本地宽松，线上以 Vercel 限制为准）
-const ALLOWED_EXT = [".pdf", ".doc", ".docx"];
-
 export async function POST(req: Request) {
   try {
     if (!process.env.MOONSHOT_API_KEY) {
       return jsonError("服务器未配置 MOONSHOT_API_KEY，请在 Vercel 环境变量中设置。", 500);
     }
 
+    // 前端已在浏览器里把 PDF/Word 解析成纯文本，这里只接收文本（payload 很小）
+    const body = (await req.json().catch(() => null)) as
+      | { text?: string; filename?: string }
+      | null;
+    const text = body?.text?.trim();
+
+    if (!text || text.length < 10) {
+      return jsonError("没有收到有效的教案文本，请重新上传文件。", 400);
+    }
+
     const client = getClient();
 
-    const form = await req.formData();
-    const file = form.get("file");
-
-    if (!file || !(file instanceof File)) {
-      return jsonError("没有收到文件，请重新上传。", 400);
-    }
-
-    const name = file.name.toLowerCase();
-    if (!ALLOWED_EXT.some((ext) => name.endsWith(ext))) {
-      return jsonError("只支持 PDF、Word（.doc/.docx）格式的教案文件。", 400);
-    }
-    if (file.size > MAX_SIZE) {
-      return jsonError("文件太大了，请控制在 20MB 以内。", 400);
-    }
-
-    // 1) 把文件上传给 Kimi，让它自动解析出文本（支持 pdf/doc/docx 等）
-    const buffer = Buffer.from(await file.arrayBuffer());
-    const uploadable = await toFile(buffer, file.name);
-    const uploaded = await client.files.create({
-      file: uploadable,
-      // Moonshot 专用 purpose，类型里没有所以 cast
-      purpose: "file-extract" as unknown as "assistants",
-    });
-
-    // 2) 取回解析后的文本内容
-    const contentResp = await client.files.content(uploaded.id);
-    const fileContent = await contentResp.text();
-
-    // 用完即删，避免在 Moonshot 侧堆积文件（失败不影响主流程）
-    client.files.del(uploaded.id).catch(() => {});
-
-    // 3) 把「系统提示词 + 教案内容 + 分析指令」发给 Kimi，流式返回
     const stream = await client.chat.completions.create({
       model: MODEL,
       temperature: 0.3,
       stream: true,
       messages: [
         { role: "system", content: SYSTEM_PROMPT },
-        { role: "system", content: fileContent },
+        { role: "system", content: text },
         { role: "user", content: USER_INSTRUCTION },
       ],
     });
