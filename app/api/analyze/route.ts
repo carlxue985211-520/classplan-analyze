@@ -9,9 +9,8 @@ function getClient() {
   return new OpenAI({
     apiKey: process.env.MOONSHOT_API_KEY,
     baseURL: "https://api.moonshot.cn/v1",
-    // SDK 自带的自动重试（针对 429/5xx），再叠加下面的手动退避
-    maxRetries: 3,
-    timeout: 50_000,
+    maxRetries: 0, // 自己控制重试，避免 SDK 内部重试叠加耗尽 60s 导致 504
+    timeout: 45_000, // 留出余量，确保在 Vercel 60s 上限前返回友好错误而非 504
   });
 }
 
@@ -19,13 +18,15 @@ const MODEL = process.env.MOONSHOT_MODEL || "moonshot-v1-auto";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-// 针对 Kimi「引擎繁忙(429)」做指数退避重试，最多 4 次
+// 针对 Kimi「繁忙/限流(429)」做有时间预算的重试：
+// 最多用 8 秒争取连接成功，超过就立刻失败（把剩余时间留给生成，避免 60s 超时 504）
 async function createWithRetry(
   client: OpenAI,
   messages: OpenAI.Chat.ChatCompletionMessageParam[]
 ) {
+  const deadline = Date.now() + 8_000;
   let lastErr: unknown;
-  for (let attempt = 0; attempt < 4; attempt++) {
+  for (;;) {
     try {
       return await client.chat.completions.create({
         model: MODEL,
@@ -36,15 +37,14 @@ async function createWithRetry(
     } catch (err) {
       lastErr = err;
       const status = (err as { status?: number })?.status;
-      // 仅对「繁忙/限流(429)」和服务端错误(5xx)重试
-      if (status === 429 || (status && status >= 500)) {
-        await sleep(800 * Math.pow(2, attempt)); // 0.8s, 1.6s, 3.2s, 6.4s
+      const retryable = status === 429 || (status !== undefined && status >= 500);
+      if (retryable && Date.now() < deadline) {
+        await sleep(1500);
         continue;
       }
       throw err;
     }
   }
-  throw lastErr;
 }
 
 export async function POST(req: Request) {
@@ -98,10 +98,11 @@ export async function POST(req: Request) {
   } catch (err) {
     const status = (err as { status?: number })?.status;
     const message = err instanceof Error ? err.message : "未知错误";
-    if (status === 429) {
+    const isTimeout = /timed out|timeout|ETIMEDOUT|ECONNRESET/i.test(message);
+    if (status === 429 || (status !== undefined && status >= 500) || isTimeout) {
       return jsonError(
-        "Kimi 当前繁忙/达到限流（429），已自动重试多次仍未成功。请过几十秒再点一次「开始分析」。",
-        429
+        "Kimi 引擎当前繁忙/响应过慢，本次未能完成。这是 Kimi 服务器侧的临时过载，和文件无关。请过一两分钟、或避开高峰时段再点一次「开始分析」。",
+        503
       );
     }
     return jsonError("分析失败：" + message, 500);
